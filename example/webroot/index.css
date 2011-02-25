@@ -15,3 +15,6 @@ h1 {
   height: 20px;
   border: 1px solid green;
 }
+div > div {
+  background: yellow;
+}

@@ -1,5 +1,9 @@
 class Browsr
   class CSS
+
+    # Used with Nokogiri::XML::Element to enable :active, :hover and :visited selectors
+    class Pseudo; def active(*); []; end; def hover(*); []; end; def visited(*); []; end; end
+
     RE_NL = Regexp.new('(\n|\r\n|\r|\f)')
     RE_NON_ASCII = Regexp.new('([\x00-\xFF])', Regexp::IGNORECASE, 'n')  #[^\0-\177]
     RE_UNICODE = Regexp.new('(\\\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])*)', Regexp::IGNORECASE | Regexp::EXTENDED | Regexp::MULTILINE, 'n')
@@ -46,7 +50,7 @@ class Browsr
       attr_reader :rules, :position
       def self.parse(string)
         rule_set = new
-        rule_set.parse(string)
+        rule_set.parse(string.gsub(%r{/\*(?:[^*]|\*(?!/))*\*/}m, ''))
         rule_set
       end
 
@@ -76,8 +80,8 @@ class Browsr
         properties
       end
 
-      def initialize
-        @properties = {}
+      def initialize(initial_properties={})
+        @properties = initial_properties
       end
 
       def parse(string)
@@ -105,6 +109,10 @@ class Browsr
 
       def respond_to_missing?(name)
         @properties.has_key?(name)
+      end
+
+      def to_css
+        @properties.map { |k,v| "#{k}: #{v};" }.join(" ")
       end
 
       def to_hash
@@ -166,6 +174,40 @@ class Browsr
 
       def inspect
         "\#<CSS::Specifity %d,%d,%d,%d>" % @value
+      end
+    end
+
+    class SelectorChain
+      def self.selector_from_node(node)
+        [
+          node.name,
+          node[:id] && "\##{node[:id]}",
+          node[:class] && node[:class].gsub(/^\s*|\s+/, '.')
+        ].compact.join('')
+      end
+
+      def self.from_string(string)
+        string.scan(//)
+      end
+
+      def self.from_node(node)
+        range = node.ancestors.last.is_a?(Nokogiri::HTML::Document) ? 0..-2 : 0..-1
+        new([node, *node.ancestors[range]].reverse.map { |node|
+          selector_from_node(node)
+        })
+      end
+
+      attr_reader :chain
+      def initialize(chain)
+        @chain = chain
+      end
+
+      def =~(other)
+        
+      end
+
+      def to_s
+        @chain.join(' > ')
       end
     end
   end

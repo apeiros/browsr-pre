@@ -13,9 +13,10 @@ class Browsr
     end
 
     class Context < JSObject
-      def initialize(browsr_window)
+      def initialize(browsr, browsr_window)
+        @browsr        = browsr
         @browsr_window = browsr_window
-        @html_window   = HTMLWindow.new(browsr_window)
+        @html_window   = HTMLWindow.new(browsr_window, self)
       end
 
       def window
@@ -26,52 +27,48 @@ class Browsr
         @html_window.document
       end
     end
-
-    class HTMLWindow < JSObject
-      def initialize(window)
-        @window = window
+    
+    class CSSStyleDeclaration < JSObject
+      def initialize(properties)
+        @properties = properties
       end
 
-      def document
-        @document ||= HTMLDocument.new(@window)
+      def getPropertyValue(name)
+        @properties[name]
+      end
+
+      def cssText
+        @properties.to_css
       end
     end
 
-    class HTMLDocument < JSObject
-      def initialize(window)
-        @window = window
+    class HTMLWindow < JSObject
+      def initialize(browsr_window, js_context)
+        @browsr_window = browsr_window
+        @js_context    = js_context
       end
 
-      def getElementById(id)
-        id = id.to_s
-        return unless id =~ R_AttrID
-        node = @window.dom.at_css("\##{id}")
-        node && HTMLElement.new(@window, node)
+      def document
+        @document ||= HTMLDocument.new(@browsr_window, @js_context)
       end
 
-      def getElementsByClassName(class_name)
-        class_name = class_name.to_s
-        return unless class_name =~ R_ClassName
-        node = @window.dom.css(class_name)
-        node && HTMLElement.new(@window, node)
-      end
-
-      def getElementsByTagName(tag_name)
-        tag_name = tag_name.to_s
-        return unless tag_name =~ R_TagName
-        node = @window.dom.css(tag_name)
-        node && HTMLElement.new(@window, node)
-      end
-
-      def querySelector(selector)
-        node = @window.dom.at_css(selector.to_s)
-        node && HTMLElement.new(@window, node)
-      end
-
-      def querySelectorAll(selector)
-        @window.dom.css(selector.to_s).map { |node|
-          HTMLElement.new(@window, node)
+      # FIXME: broken
+      # * get order right (origin, specificity, important)
+      # * get merging right (break up shorthands before merge)
+      # * consider style tag
+      # * handle 'inherited'
+      # * handle property defaults
+      def getComputedStyle(html_element, pseudoElt=nil)
+        node    = html_element.instance_variable_get(:@node)
+        pseudo  = Browsr::CSS::Pseudo.new
+        matches = @browsr_window.styles.rules.select { |rule|
+          @browsr_window.dom.css(rule.selector, pseudo).include?(node)
         }
+        properties_hash = matches.inject({}) { |m,r|
+          m.merge(r.properties.to_hash)
+        }
+
+        CSSStyleDeclaration.new(Browsr::CSS::Properties.new(properties_hash))
       end
     end
 
@@ -85,9 +82,10 @@ class Browsr
                           :lastChild, :baseURI, :firstChild, :nodeValue, :textContent, :nodeType, :nodeName, :prefix, :childNodes,
                           :nextSibling, :attributes, :ownerDocument, :namespaceURI, :localName, :parentElement
 
-      def initialize(window, node)
-        @window = window
-        @node   = node
+      def initialize(browsr_window, js_context, node)
+        @browsr_window = browsr_window
+        @js_context    = js_context
+        @node          = node
       end
 
       def innerHTML=(value)
@@ -121,6 +119,48 @@ class Browsr
       def to_s
         attrs = @node.attributes.empty? ? "" : " #{@node.attributes.map { |name,a| "#{name}=#{a.value.inspect}" }.join(" ")}"
         "[HTMLElement <#{@node.name}#{attrs}>]"
+      end
+    end
+
+    class HTMLDocument < HTMLElement
+      def initialize(browsr_window, js_context)
+        super(browsr_window, js_context, browsr_window.dom.at_css('body'))
+      end
+
+      def defaultView
+        @js_context.window
+      end
+
+      def getElementById(id)
+        id = id.to_s
+        return unless id =~ R_AttrID
+        node = @browsr_window.dom.at_css("\##{id}")
+        node && HTMLElement.new(@browsr_window, @js_context, node)
+      end
+
+      def getElementsByClassName(class_name)
+        class_name = class_name.to_s
+        return unless class_name =~ R_ClassName
+        node = @browsr_window.dom.css(class_name)
+        node && HTMLElement.new(@browsr_window, @js_context, node)
+      end
+
+      def getElementsByTagName(tag_name)
+        tag_name = tag_name.to_s
+        return unless tag_name =~ R_TagName
+        node = @browsr_window.dom.css(tag_name)
+        node && HTMLElement.new(@browsr_window, @js_context, node)
+      end
+
+      def querySelector(selector)
+        node = @browsr_window.dom.at_css(selector.to_s)
+        node && HTMLElement.new(@browsr_window, @js_context, node)
+      end
+
+      def querySelectorAll(selector)
+        @browsr_window.dom.css(selector.to_s).map { |node|
+          HTMLElement.new(@browsr_window, @js_context, node)
+        }
       end
     end
   end
