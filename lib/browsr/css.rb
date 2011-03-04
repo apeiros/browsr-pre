@@ -1,214 +1,90 @@
+require 'rational'
+require 'set'
+require 'browsr/css/expressions'
+require 'browsr/css/mediaquery'
+require 'browsr/css/media'
+require 'browsr/css/medium'
+require 'browsr/css/parser'
+require 'browsr/css/rule'
+require 'browsr/css/ruleset'
+require 'browsr/css/selector'
+
 class Browsr
+
+  # Scenarios:
+  # * load stylesheet via style attribute
+  # * load stylesheet via link tag
+  # * load stylesheet via link
+  # * load stylesheet via @import (treated as "loaded before the current file")
+  # * unload stylesheet (nb: @import'ed stylesheets become unloaded too; unloads can happen upon deletion of a <link>
+  #
+  # Assumptions:
+  # * unloading a stylesheet is rare
+  # * loading a stylesheet late (DOM scripting) is rare
+  # * change of medium/media-query-values is rare
+  # * actually querying css is uncommon (more often than rare, still not very often)
+  # -> wait with parsing css until an actual query is performed
+  # -> don't handle media queries dynamically, handle them at load time
+  #
+  # I need:
+  # * file
+  # * line
+  # * specificity (origin + css-specificity + position)
+  # * media (ignore different media)
+  #
+  # Terminology:
+  # * source:           file & line something occurred
+  # * selector:         the css selector, e.g. "#foo > bar[title="baz"]"
+  # * ruleset:          a collection (by selector) of rules
+  # * rule:             a structure containing a single property-value rule (e.g. "opacity: 0.8") along with its specificity and source
+  # * specificity:      (origin + css-specificity + position)
+  # * css-specificity:  specificity as specified by css
+  #
+  # Structure:
+  #   ruleset(media) -> rule(selector/specificity) -> property
+  #   => [RuleSet(Rule, Rule, ...), RuleSet(Rule, Rule, ...), ...]
+  #
   class CSS
-
-    # Used with Nokogiri::XML::Element to enable :active, :hover and :visited selectors
-    class Pseudo; def active(*); []; end; def hover(*); []; end; def visited(*); []; end; end
-
-    RE_NL = Regexp.new('(\n|\r\n|\r|\f)')
-    RE_NON_ASCII = Regexp.new('([\x00-\xFF])', Regexp::IGNORECASE, 'n')  #[^\0-\177]
-    RE_UNICODE = Regexp.new('(\\\\[0-9a-f]{1,6}(\r\n|[ \n\r\t\f])*)', Regexp::IGNORECASE | Regexp::EXTENDED | Regexp::MULTILINE, 'n')
-    RE_ESCAPE = Regexp.union(RE_UNICODE, '|(\\\\[^\n\r\f0-9a-f])')
-    RE_IDENT = Regexp.new("[\-]?([_a-z]|#{RE_NON_ASCII}|#{RE_ESCAPE})([_a-z0-9\-]|#{RE_NON_ASCII}|#{RE_ESCAPE})*", Regexp::IGNORECASE, 'n')
-  
-    # General strings
-    RE_STRING1 = Regexp.new('(\"(.[^\n\r\f\\"]*|\\\\' + RE_NL.to_s + '|' + RE_ESCAPE.to_s + ')*\")')
-    RE_STRING2 = Regexp.new('(\'(.[^\n\r\f\\\']*|\\\\' + RE_NL.to_s + '|' + RE_ESCAPE.to_s + ')*\')')
-    RE_STRING = Regexp.union(RE_STRING1, RE_STRING2)
-  
-    RE_URI = Regexp.new('(url\([\s]*([\s]*' + RE_STRING.to_s + '[\s]*)[\s]*\))|(url\([\s]*([!#$%&*\-~]|' + RE_NON_ASCII.to_s + '|' + RE_ESCAPE.to_s + ')*[\s]*)\)', Regexp::IGNORECASE | Regexp::EXTENDED  | Regexp::MULTILINE, 'n')
-    URI_RX = /url\(("([^"]*)"|'([^']*)'|([^)]*))\)/im
-  
-    # Initial parsing
-    RE_AT_IMPORT_RULE = /\@import[\s]+(url\()?["''"]?(.[^'"\s"']*)["''"]?\)?([\w\s\,^\])]*)\)?;?/
-    
-    #--
-    #RE_AT_MEDIA_RULE = Regexp.new('(\"(.[^\n\r\f\\"]*|\\\\' + RE_NL.to_s + '|' + RE_ESCAPE.to_s + ')*\")')
-    
-    #RE_AT_IMPORT_RULE = Regexp.new('@import[\s]*(' + RE_STRING.to_s + ')([\w\s\,]*)[;]?', Regexp::IGNORECASE) -- should handle url() even though it is not allowed
-    #++
-    IMPORTANT_IN_PROPERTY_RX = /[\s]*\!important[\s]*/i
-    STRIP_CSS_COMMENTS_RX = /\/\*.*?\*\//m
-    STRIP_HTML_COMMENTS_RX = /\<\!\-\-|\-\-\>/m
-  
-    # Special units
-    BOX_MODEL_UNITS_RX = /(auto|inherit|0|([\-]*([0-9]+|[0-9]*\.[0-9]+)(e[mx]+|px|[cm]+m|p[tc+]|in|\%)))([\s;]|\Z)/imx
-    RE_LENGTH_OR_PERCENTAGE = Regexp.new('([\-]*(([0-9]*\.[0-9]+)|[0-9]+)(e[mx]+|px|[cm]+m|p[tc+]|in|\%))', Regexp::IGNORECASE)
-    RE_BACKGROUND_POSITION = Regexp.new("((#{RE_LENGTH_OR_PERCENTAGE})|left|center|right|top|bottom)", Regexp::IGNORECASE | Regexp::EXTENDED)
-    FONT_UNITS_RX = /(([x]+\-)*small|medium|large[r]*|auto|inherit|([0-9]+|[0-9]*\.[0-9]+)(e[mx]+|px|[cm]+m|p[tc+]|in|\%)*)/i
-   
-    # Patterns for specificity calculations
-    ELEMENTS_AND_PSEUDO_ELEMENTS_RX = /((^|[\s\+\>]+)[\w]+|\:(first\-line|first\-letter|before|after))/i
-    NON_ID_ATTRIBUTES_AND_PSEUDO_CLASSES_RX = /(\.[\w]+)|(\[[\w]+)|(\:(link|first\-child|lang))/i
-  
-    # Colours
-    RE_COLOUR_RGB = Regexp.new('(rgb[\s]*\([\s-]*[\d]+(\.[\d]+)?[%\s]*,[\s-]*[\d]+(\.[\d]+)?[%\s]*,[\s-]*[\d]+(\.[\d]+)?[%\s]*\))', Regexp::IGNORECASE)
-    RE_COLOUR_HEX = /(#([0-9a-f]{6}|[0-9a-f]{3})([\s;]|$))/i
-    RE_COLOUR_NAMED = /([\s]*^)?(aqua|black|blue|fuchsia|gray|green|lime|maroon|navy|olive|orange|purple|red|silver|teal|white|yellow|transparent)([\s]*$)?/i
-    RE_COLOUR = Regexp.union(RE_COLOUR_RGB, RE_COLOUR_HEX, RE_COLOUR_NAMED)
-
-    class RuleSet
-      attr_reader :rules, :position
-      def self.parse(string)
-        rule_set = new
-        rule_set.parse(string.gsub(%r{/\*(?:[^*]|\*(?!/))*\*/}m, ''))
-        rule_set
-      end
-
-      def initialize
-        @position = 0
-        @rules    = []
-      end
-
-      def parse(string)
-        string.scan(/(\S[^{]*)\{([^}]*)\}/m) do |selectors, properties|
-          properties = Properties.parse(properties)
-          selectors.split(/,/).each do |selector|
-            self << Rule.new(@position += 1, selector.strip, properties)
-          end
-        end
-      end
-
-      def <<(rule)
-        @rules << rule
-      end
+    def initialize(&default_loader)
+      @rulesets = []
     end
 
-    class Properties
-      def self.parse(string)
-        properties = new
-        properties.parse(string)
-        properties
-      end
-
-      def initialize(initial_properties={})
-        @properties = initial_properties
-      end
-
-      def parse(string)
-        string.scan(/([^:]*):([^;]*);/).each do |property, value|
-          self[property.strip.tr('-','_').downcase.to_sym] = value.strip
-        end
-      end
-
-      def [](property)
-        @properties[property.is_a?(Symbol) ? property : property.to_s.strip.tr('-','_').downcase.to_sym]
-      end
-
-      def []=(property, value)
-        @properties[property] = value
-      end
-
-      def method_missing(name, *args)
-        if @properties.has_key?(name) then
-          raise ArgumentError, "Too many arguments" unless args.empty?
-          @properties[name]
-        else
-          super
-        end
-      end
-
-      def respond_to_missing?(name)
-        @properties.has_key?(name)
-      end
-
-      def to_css
-        @properties.map { |k,v| "#{k}: #{v};" }.join(" ")
-      end
-
-      def to_hash
-        @properties.dup
-      end
+    # source is merged before importing, relevant for specificity
+    def import(importing, source, &loader)
+      raise "@import rule is currently not handled"
+      return if @imported.include?(source)
     end
 
-    class Rule
-      include Comparable
-
-      attr_reader :position, :selector, :properties, :importance, :specificity
-
-      def initialize(position, selector, properties)
-        @selector     = selector
-        @specificity  = Specificity.parse(selector)
-        @properties   = properties
-        @importance   = [*@specifity, position]
+    def append_external_stylesheet(data, source, line=1, &loader)
+      parser = Parser.new(self, source, line, @options) do |import|
+        append_parsed_stylesheet(
       end
+      parser.parse(data)
     end
 
-    class Specificity
-      OriginSpecifity = {
+    def append_parsed_stylesheet(stylesheet)
+    end
+
+    def parse_stylesheet(data, source, line)
+    end
+
+    def parse_style_tag(data, source, line)
+    end
+
+    def parse_style_attribute(data, source, line)
+    end
+
+    def computed_style_for_nokogiri(dom, node, medium=Medium.new([:screen],nil,nil))
+      # get all rules whose media queries are satisfied by the medium
+      rules = @rulesets.grep(medium).map { |ruleset| ruleset.rules }.flatten(1)
+
+      # get all rulesets that match the specified node
+      applying_rules = rulesets.select { |rule|
+        dom.css(rule.selector).include?(node)
       }
-      include Comparable
 
-      def self.parse_to_int(selector)
-      end
-
-      def self.parse(selector, origin=:user)
-        b = selector.count('#')
-        a = 0
-        b = selector.scan(/\#/).length
-        c = selector.scan(NON_ID_ATTRIBUTES_AND_PSEUDO_CLASSES_RX).length
-        d = selector.scan(ELEMENTS_AND_PSEUDO_ELEMENTS_RX).length
-        new(0,b,c,d)
-      end
-
-      attr_reader :a, :b, :c, :d, :value
-
-      def initialize(a,b,c,d)
-        @a      = a
-        @b      = b
-        @c      = c
-        @d      = d
-        @value  = [a,b,c,d]
-      end
-
-      def <=>(other)
-        other.respond_to?(:value) && @value <=> other.value
-      end
-
-      def to_a
-        @value
-      end
-
-      def binary
-        @value.pack("S4") # base 65536 ought to be enough, yes?
-      end
-
-      def inspect
-        "\#<CSS::Specifity %d,%d,%d,%d>" % @value
-      end
-    end
-
-    class SelectorChain
-      def self.selector_from_node(node)
-        [
-          node.name,
-          node[:id] && "\##{node[:id]}",
-          node[:class] && node[:class].gsub(/^\s*|\s+/, '.')
-        ].compact.join('')
-      end
-
-      def self.from_string(string)
-        string.scan(//)
-      end
-
-      def self.from_node(node)
-        range = node.ancestors.last.is_a?(Nokogiri::HTML::Document) ? 0..-2 : 0..-1
-        new([node, *node.ancestors[range]].reverse.map { |node|
-          selector_from_node(node)
-        })
-      end
-
-      attr_reader :chain
-      def initialize(chain)
-        @chain = chain
-      end
-
-      def =~(other)
-        
-      end
-
-      def to_s
-        @chain.join(' > ')
-      end
+      # merge rulesets in order of specificity
+      Properties.merge(applying_rules)
     end
   end
 end

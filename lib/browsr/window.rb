@@ -1,39 +1,75 @@
+require 'v8'
+require 'nokogiri'
+require 'browsr/css'
+require 'browsr/javascript'
+require 'browsr/javascriptengine'
+
+
+
 class Browsr
+
+  # Window is the equivalent to the state a normal browser has when the user
+  # visits a website. It is the context for any javascript, the relative path
+  # for assets like images and stylesheets etc.
   class Window
     attr_reader :original_source
-    attr_reader :original_dom
-    attr_reader :dom
     attr_reader :javascript
     attr_reader :resources
     attr_reader :page
     attr_reader :base
-    attr_reader :styles
 
-    def initialize(browser, page, source)
+    def initialize(browser, response)
       @browser         = browser
-      @page            = page
-      @base            = File.dirname(page)
+      @page            = response.page
       @resources       = {}
-      @styles          = CSS::RuleSet.new
       @original_source = source
-      @original_dom    = Nokogiri.HTML(source)
-      @original_dom.css('head script,head link[rel="stylesheet"]').each do |node|
-        case node.name
-          when "script"
-            resource = load_resource(node, node["src"], :script)
-            evaluate_javascript_resource(resource)
-          when "link"
-            resource = load_resource(node, node["href"], :link)
-            evaluate_stylesheet_resource(resource)
-        else
-          raise "Unknown node.name #{node.name.inspect}"
+    end
+
+    def original_dom
+      @original_dom ||= Nokogiri.HTML(source)
+    end
+
+    def dom
+      @dom ||= begin
+        original_dom.css('head script,head link[rel="stylesheet"]').each do |node|
+          case node.name
+            when "script"
+              # add an if to test whether it's really javascript
+              resource = load_resource(node, node["src"], :javascript)
+              evaluate_javascript_resource(resource)
+            when "link"
+              if node["rel"].nil? || ['stylesheet', 'alternate stylesheet'].include?(node["rel"].downcase) then
+                resource = load_resource(node, node["href"], :stylesheet)
+                evaluate_stylesheet_resource(resource)
+              end
+            when "style"
+              resource = load_resource(node, nil, :stylesheet)
+              evaluate_stylesheet_resource(resource)
+          else
+            raise "Unknown node.name #{node.name.inspect}"
+          end
         end
+        original_dom.dup
       end
-      @dom            = original_dom.dup
     end
 
     def source
       @dom.to_html
+    end
+
+    def css
+      @css ||= begin
+        dom # loads the dom and with it all external stylesheets
+        @css = CSS.new # TODO: add media options
+        @resources.values.select { |resource|
+          #resource.mime_type == :'text/css'
+          resource.type == :stylesheet
+        }.sort_by { |resource|
+          resource.order
+        }.each do |resource|
+          @css.add_stylesheet(resource.data)
+        end
+      end
     end
 
     def load_resource(node, url, type)
@@ -49,7 +85,8 @@ class Browsr
         line        = 1
       end
 
-      resource               = Resource.new(type, identifier, file, line, data)
+      resource               = Resource.new(@resources.size, type, identifier, file, line, data)
+      raise ArgumentError, "Identifier #{identifier.inspect} already exists"
       @resources[identifier] = resource
 
       resource

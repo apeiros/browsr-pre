@@ -1,3 +1,3 @@
 class Browsr
-  Resource = Struct.new(:type, :identifier, :file, :line, :data)
+  Resource = Struct.new(:order, :type, :identifier, :file, :line, :data)
 end
