@@ -1,6 +1,7 @@
 class Browsr
   class CSS
     # A MediaQuery that can be used to match against a Medium
+    # TODO: implement
     class MediaQuery
       def self.parse(string)
         new

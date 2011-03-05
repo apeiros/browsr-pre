@@ -5,9 +5,13 @@ require 'browsr/css/expressions'
 class Browsr
   class CSS
     # Properties is a collection of properties
+    # TODO:
+    # * Complete decomposition
+    # * Enable composition in #[] and decomposition in #[]=
+    # * Add initial values
     class Properties
-      DecomposeTopRightLeftBottom = proc { |top, right, bottom, left| proc { |property, value, top, right, bottom, left|
-        values = value.split(/#{Expressions::Whitespace}+/n)
+      DecomposeTopRightLeftBottom = proc { |top, right, bottom, left| proc { |property, value|
+        values = value.split(/#{Expressions::WHITESPACE}+/n)
         # 1 value:  1: top, right, bottom & left
         # 2 values: 1: top & bottom, 2: left & right
         # 3 values: 1: top, 2: left & right, 3: bottom
@@ -45,9 +49,11 @@ class Browsr
             raise "Invalid number of values for #{property}"
         end
       }}
-      DecomposeCopyToMany = proc { |*many| proc { |property, value, *many|
-        result = Hash[many.zip(Array.new(many.size, value))]
-      }}
+      DecomposeCopyToMany = proc { |*many|
+        proc { |property, value|
+          Hash[many.zip(Array.new(many.size, value))]
+        }
+      }
       # shorthands that are a collection of attributes in one, like border -> border-<location>
       DecomposeProperty = {
         :'border'       => DecomposeCopyToMany[:'border-top', :'border-right', :'border-bottom', :'border-left'],
@@ -58,11 +64,16 @@ class Browsr
       # shorthands that are a collection of values
       DecomposeValue = {
         :background => {
-          Expressions::COLOR      => :'background-color',
-          Expressions::URL        => :'background-image',
-          Expressions::REPEAT     => :'background-repeat',
-          Expressions::POSITION   => :'background-position',
-          Expressions::ATTACHMENT => :'background-attachment'
+          Expressions::COLOR        => :'background-color',
+          Expressions::URL          => :'background-image',
+          Expressions::REPEAT       => :'background-repeat',
+          Expressions::POSITION     => :'background-position',
+          Expressions::ATTACHMENT   => :'background-attachment'
+        },
+        :'border' => {
+          Expressions::BORDER_STYLE => :'border-style',
+          Expressions::COLOR        => :'border-color',
+          Expressions::LENGTH       => :'border-width'
         },
         :'border-top' => {
           Expressions::BORDER_STYLE => :'border-top-style',
@@ -70,23 +81,50 @@ class Browsr
           Expressions::LENGTH       => :'border-top-width'
         },
         :'border-right' => {
-          Expressions::BORDER_STYLE  => :'border-right-style',
-          Expressions::COLOR         => :'border-right-color',
-          Expressions::LENGTH        => :'border-right-width'
+          Expressions::BORDER_STYLE => :'border-right-style',
+          Expressions::COLOR        => :'border-right-color',
+          Expressions::LENGTH       => :'border-right-width'
         },
         :'border-bottom' => {
-          Expressions::BORDER_STYLE  => :'border-bottom-style',
-          Expressions::COLOR         => :'border-bottom-color',
-          Expressions::LENGTH        => :'border-bottom-width'
+          Expressions::BORDER_STYLE => :'border-bottom-style',
+          Expressions::COLOR        => :'border-bottom-color',
+          Expressions::LENGTH       => :'border-bottom-width'
         },
         :'border-left' => {
-          Expressions::BORDER_STYLE  => :'border-left-style',
-          Expressions::COLOR         => :'border-left-color',
-          Expressions::LENGTH        => :'border-left-width'
+          Expressions::BORDER_STYLE => :'border-left-style',
+          Expressions::COLOR        => :'border-left-color',
+          Expressions::LENGTH       => :'border-left-width'
         },
         #:font       => [:font_family, :font_size, ]
       }
 
+      # @returns [Hash]
+      def self.decompose(name, value)
+        result = {}
+        decompose_value = DecomposeValue[name] # more expensive usually, so do that first
+        if decompose_value then
+          original_value = value
+          decompose_value.each do |regex, prop|
+            value = value.sub(regex) { |val|
+              result.update(decompose(prop, val))
+              ''
+            }.strip
+          end
+          raise "Incomplete decomposition of #{name.inspect}, residue: #{value.inspect}, original: #{original_value.inspect}" unless value.empty?
+        else
+          decompose_property  = DecomposeProperty[name]
+          if decompose_property then
+            decomposed = decompose_property[name, value]
+            result.update(decomposed)
+          else
+            result[name] = value
+          end
+        end
+
+        result
+      end
+
+      # Create a single set of properties from a couple of rules
       def self.merge_rules(rules)
         properties = Properties.new
         rules.sort.each do |rules|
@@ -96,45 +134,89 @@ class Browsr
         properties
       end
 
+      def empty?
+        @__hash__.empty?
+      end
+
+      def size
+        @__hash__.size
+      end
+
+      # This is the internal hash-table, used for internal purposes. Use with care.
+      attr_reader :__hash__
+
+      def initialize(properties_hash)
+        @__hash__ = properties_hash
+      end
+
+      # Add multiple values at once
       def update(properties)
-        @properties.update(properties)
+        @__hash__.update(properties)
+      end
+
+      # Add values that are set to 'inherit'
+      # Returns nil if all properties which should inherit have been set to a
+      # final value, the property names otherwise otherwise
+      def inherit(properties, names=nil)
+        names ||= @__hash__.select { |key, value| value == :inherit }.map(&:first)
+
+        names.reject do |name|
+          inherited = properties[name]
+          if inherited && inherited != :inherit then
+            @__hash__[name] = inherited
+            true
+          else
+            false
+          end
+        end
+      end
+
+      # unlike [], this does not perform any normalization or composition and is
+      # therefore the fastest access.
+      # For that reason it also only works for decomposed names.
+      # Property names must be given as a Symbol matching
+      # the css spec exactly. Example: properties.at(:'border-left-style')
+      # IMPORTANT: properties.at(:'border') won't work since 'border' is a
+      # composed property. Use #[] for that.
+      def at(property)
+        @__hash__[property]
       end
 
       def [](property)
-        @properties[property.to_sym]
+        @__hash__[property.to_sym]
       end
 
       def []=(property, value)
-        @properties[property.to_sym] = value
+        @__hash__[property.to_sym] = value
       end
 
       def method_missing(original_name, *args)
         name   = original_name
-        exists = @properties.has_key?(name)
+        exists = @__hash__.has_key?(name)
         unless exists then
           name = original_name.to_s.tr('_','-').to_sym
-          exists = @properties.has_key?(name)
+          exists = @__hash__.has_key?(name)
         end
 
         if exists then
           raise ArgumentError, "Too many arguments" unless args.empty?
-          @properties[name]
+          @__hash__[name]
         else
           super
         end
       end
 
       def respond_to_missing?(name)
-        @properties.has_key?(name) || @properties.has_key?(name.to_s.tr('_','-').to_sym)
+        @__hash__.has_key?(name) || @__hash__.has_key?(name.to_s.tr('_','-').to_sym)
       end
 
       def to_css
-        @properties.map { |k,v| "#{k}: #{v};" }.join(" ")
+        @__hash__.map { |k,v| "#{k}: #{v};" }.join(" ")
       end
       alias to_s to_css
 
       def to_hash
-        @properties.dup
+        @__hash__.dup
       end
 
       def inspect

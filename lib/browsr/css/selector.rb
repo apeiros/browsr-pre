@@ -50,18 +50,69 @@ class Browsr
       attr_reader :normal_specificity
       attr_reader :important_specificity
       attr_reader :chain
+      attr_reader :string # internal purposes only
 
-      def initialize(chain, counts, position, origin)
-        css_specificity         = css_specificity_from_counts(*counts) | position
-        @normal_specificity     = css_specificity | UnaugmentedOrigin[origin][:normal]
-        @important_specificity  = css_specificity | UnaugmentedOrigin[origin][:important]
-        @counts                 = counts
+      def self.with_calculated_specificities(chain, counts, position, origin)
+        css_specificity       = css_specificity_from_counts(*counts) | position
+        normal_specificity    = css_specificity | UnaugmentedOrigin[origin][:normal]
+        important_specificity = css_specificity | UnaugmentedOrigin[origin][:important]
+
+        new(chain, normal_specificity, important_specificity)
+      end
+
+      def initialize(chain, normal_specificity, important_specificity, string=nil)
+        @normal_specificity     = normal_specificity
+        @important_specificity  = important_specificity
         @chain                  = chain
-        @string                 = chain.map { |type, value| value == :descendant ? " " : value }.join('')
+        @string                 = string || chain.map { |type, value| value == :descendant ? " " : value }.join('')
+      end
+
+      def normal_selector
+        NormalSelector.new(@chain, @normal_specificity, @important_specificity, @string)
+      end
+
+      def important_selector
+        ImportantSelector.new(@chain, @normal_specificity, @important_specificity, @string)
       end
 
       def to_s
         @string.dup
+      end
+    end
+
+    class NormalSelector < Selector
+      include Comparable
+
+      alias specificity normal_specificity
+
+      def hash
+        [@string, @normal_specificity].hash
+      end
+
+      def eql?(other)
+        @string.eql?(other.string) && @normal_specificity.eql?(other.specificity)
+      end
+
+      def <=>(other)
+        @normal_specificity <=> other.specificity
+      end
+    end
+
+    class ImportantSelector < Selector
+      include Comparable
+
+      alias specificity important_specificity
+
+      def hash
+        [@string, @important_specificity].hash
+      end
+
+      def eql?(other)
+        @string.eql?(other.string) && @important_specificity.eql?(other.specificity)
+      end
+
+      def <=>(other)
+        @important_specificity <=> other.specificity
       end
     end
   end

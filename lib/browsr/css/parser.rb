@@ -4,10 +4,19 @@ require 'browsr/css/rule'
 
 
 
+def parse_css(string, media=Browsr::CSS::Media.new(nil,nil,nil), file="test.css")
+  css = Browsr::CSS.new
+  Browsr::CSS::Parser.new string, css, :author_style_sheet, media, file
+end
+
+
+
 class Browsr
   class CSS
     class Parser
       include Expressions
+
+      ValidProperty = Hash.new(true) # FIXME: provide a list with string-keys
 
       # For the arguments, see Parser::new
       def self.parse(data, styles, origin, filename, line=1)
@@ -16,7 +25,7 @@ class Browsr
         parser
       end
 
-      attr_reader   :data, :scanner, :styles, :origin, :filename, :line
+      attr_reader   :data, :scanner, :css, :media, :origin, :filename, :line, :debug
 
       # @param data [String]
       #   The raw data to parse
@@ -26,13 +35,15 @@ class Browsr
       #   The filename to report in rules and errors
       # @param line [Integer]
       #   The starting line number (default: 1)
-      def initialize(data, styles, origin, filename, line=1)
+      def initialize(data, css, origin, media, filename, line=1)
         @data       = data.encode(Encoding::BINARY)
-        @styles     = styles
+        @css        = css
+        @media      = media
         @origin     = origin
         @filename   = filename.dup.freeze
         @line       = line
         @scanner    = StringScanner.new(data)
+        @debug      = []
       end
     
       def current_selectors
@@ -70,16 +81,18 @@ class Browsr
             when scan(COMMENT)
               # nothing
             when scan(AT_RULE)
-              p :parse => :parse_at_rule
-              parse_at_rule
+              @debug << [:parse, :parse_at_rule, position]
+              parse_at_rule(@media)
             else
-              p :parse => :parse_ruleset
-              parse_ruleset
+              @debug << [:parse, :parse_ruleset, position]
+              parse_ruleset(@media)
           end
         end
+
+        self
       end
 
-      def parse_block
+      def parse_block(media)
         until @scanner.eos?
           case
             when scan(WHITESPACE)
@@ -87,16 +100,17 @@ class Browsr
             when scan(COMMENT)
               # nothing
             when scan(CLOSE_BLOCK)
+              @debug << [:terminate, :parse_block, position]
               return
             else
-              p :parse_block => :parse_ruleset
-              parse_ruleset
+              @debug << [:parse_block, :parse_ruleset, position]
+              parse_ruleset(media)
           end
         end
       end
 
       # not really implemented...
-      def parse_at_rule
+      def parse_at_rule(media)
         until @scanner.eos?
           case
             when scan(WHITESPACE)
@@ -104,12 +118,15 @@ class Browsr
             when scan(COMMENT)
               # nothing
             when scan(TERMINATE)
+              @debug << [:terminate, :parse_at_rule, position]
               return
             when scan(ANYTHING)
               # nothing
             when scan(OPEN_BLOCK)
-              p :parse_at_rule => :parse_block
-              return parse_block
+              @debug << [:parse_at_rule, :parse_block, position]
+              value = parse_block(media)
+              @debug << [:terminate, :parse_at_rule, position]
+              return value
           else
             malformed!
           end
@@ -117,15 +134,14 @@ class Browsr
         premature_end!(:at_rule)
       end
 
-      def parse_ruleset
+      def parse_ruleset(media)
         current_chain       = []
         current_specificity = [0,0,0]
-        selectors   = [current_chain] # [selector, selector, ...]; selector: [piece, piece, ...]; piece: [:id | :class | :type | :combinator, <value>]
+        selectors           = []
         until @scanner.eos?
           case
             when scan(WHITESPACE)
-              unless current_chain.empty? || current_chain.last.last == :descendant then
-                malformed! if current_chain.last.first == :combinator
+              unless current_chain.empty? || current_chain.last.first == :combinator then # whitespace/descendant has least precedence
                 current_chain << [:combinator, :descendant]
               end
             when scan(COMMENT)
@@ -146,27 +162,37 @@ class Browsr
               current_specificity[2] += 1
               current_chain << [:type_selector, @scanner[0]]
             when scan(COMBINATOR)
+              current_chain.pop if current_chain.last.last == :descendant # the 'descendant' has less precedence
               malformed! if current_chain.empty? || current_chain.last.first == :combinator
               current_chain << [:combinator, @scanner[0]]
             when scan(COMMA)
               malformed! if current_chain.empty?
               malformed! if current_chain.last.first == :combinator
-              current_chain      = []
-              selectors << current_chain
+              selectors << Selector.with_calculated_specificities(current_chain, current_specificity, @css.position += 1, @origin)
+              current_chain       = []
+              current_specificity = [0,0,0]
             when scan(OPEN_BLOCK)
               malformed! if current_chain.empty?
               current_chain.pop if current_chain.last.last == :descendant
               malformed! if current_chain.last.first == :combinator
-              p :parse_ruleset => :parse_style_block
-              return parse_style_block(selectors, current_specificity, nil)
+              selectors << Selector.with_calculated_specificities(current_chain, current_specificity, @css.position += 1, @origin)
+              @debug << [:parse_ruleset, :parse_style_block, position]
+              value = parse_style_block(media, selectors)
+              @debug << [:terminate, :parse_at_rule, position]
+              return value
           else
             malformed!
           end
         end
       end
 
-      def parse_style_block(selectors, media)
-        string_selectors = selectors.map { |chain, specificity| selector_chain_to_string(chain) }.join(', ')
+      def parse_style_block(media, selectors)
+        normal_selectors, important_selectors = *selectors.map { |selector|
+          [selector.normal_selector, selector.important_selector]
+        }.transpose
+        normal_rules    = normal_selectors.map { |selector| Rule.new(selector) }
+        important_rules = important_selectors.map { |selector| Rule.new(selector) }
+
         until @scanner.eos?
           case
             when scan(WHITESPACE)
@@ -174,15 +200,23 @@ class Browsr
             when scan(COMMENT)
               # nothing
             when scan(CLOSE_BLOCK)
+              (normal_rules+important_rules).each do |rule|
+                @css.add_rule(media, rule)
+              end
+              @debug << [:terminate, :parse_style_block, position]
               return
             when check(IDENT)
+              @debug << [:parse_style_block, :parse_rule, position]
               property, value, important = *parse_rule
-              puts "parsed #{property.inspect}: #{value.inspect}; selectors: #{string_selectors}; media: #{current_media}"
-              decomposed = Rule.decompoase(property, value)
-              decomposed.each do |property, value|
-                string_selectors.each do |selector|
-                  @stylesheet.add Rule.new(property, value, selector, media)
+              if ValidProperty[property] then
+                begin
+                  decomposed = Properties.decompose(property.to_sym, value)
+                rescue
+                  puts "#{$!.class} at #{position}"
+                  raise
                 end
+                rules      = important ? important_rules : normal_rules
+                rules.each do |rule| rule.update(decomposed) end
               end
           else
             malformed!
@@ -202,6 +236,7 @@ class Browsr
         parse_whitespace_and_comment
         important = scan(IMPORTANT) ? true : false
         malformed! unless scan(TERMINATE)
+        @debug << [:terminate, :parse_rule, position]
 
         [property, value, important]
       end

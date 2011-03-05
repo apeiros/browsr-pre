@@ -1,10 +1,11 @@
 require 'rational'
 require 'set'
 require 'browsr/css/expressions'
-require 'browsr/css/mediaquery'
 require 'browsr/css/media'
+require 'browsr/css/mediaquery'
 require 'browsr/css/medium'
 require 'browsr/css/parser'
+require 'browsr/css/properties'
 require 'browsr/css/rule'
 require 'browsr/css/ruleset'
 require 'browsr/css/selector'
@@ -45,8 +46,13 @@ class Browsr
   #   => [RuleSet(Rule, Rule, ...), RuleSet(Rule, Rule, ...), ...]
   #
   class CSS
+    attr_accessor :position
+    attr_reader   :rulesets, :by_media
+
     def initialize(&default_loader)
       @rulesets = []
+      @by_media = {}
+      @position = 0
     end
 
     # source is merged before importing, relevant for specificity
@@ -57,9 +63,23 @@ class Browsr
 
     def append_external_stylesheet(data, source, line=1, &loader)
       parser = Parser.new(self, source, line, @options) do |import|
-        append_parsed_stylesheet(
+        append_parsed_stylesheet()
       end
       parser.parse(data)
+    end
+
+    def add_rule(media, rule)
+      ruleset = find_or_create_ruleset(media)
+      ruleset.update(rule)
+    end
+
+    def find_or_create_ruleset(media)
+      found = @by_media[media]
+      return found if found
+      created = RuleSet.new(media)
+      @by_media[media] = created
+      @rulesets       << created
+      created
     end
 
     def append_parsed_stylesheet(stylesheet)
@@ -79,12 +99,12 @@ class Browsr
       rules = @rulesets.grep(medium).map { |ruleset| ruleset.rules }.flatten(1)
 
       # get all rulesets that match the specified node
-      applying_rules = rulesets.select { |rule|
+      applying_rules = rules.select { |rule|
         dom.css(rule.selector).include?(node)
       }
 
       # merge rulesets in order of specificity
-      Properties.merge(applying_rules)
+      Properties.merge_rules(applying_rules)
     end
   end
 end
