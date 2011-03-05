@@ -1,8 +1,8 @@
 require 'mime/types'
 
 class Servr
-  def initialize
-    @public = File.expand_path('webroot')
+  def initialize(webroot)
+    @public = File.expand_path(webroot)
     #puts "Starting with pid #{$$} and public: #{@public.inspect}"
   end
 

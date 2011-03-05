@@ -6,6 +6,13 @@ class Browsr
   attr_reader :current_window
   attr_reader :medium
 
+  def self.rack(app, options)
+    require 'browsr/rack'
+    browsr = new
+    browsr.extend Browsr::Rack
+    browsr
+  end
+
   def initialize(app, options={})
     @app            = app
     @mock_request   = Rack::MockRequest.new(app)

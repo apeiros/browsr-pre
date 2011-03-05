@@ -4,5 +4,5 @@ require 'servr'
 
 use Rack::CommonLogger
 use Rack::ShowExceptions
-servr = Servr.new
+servr = Servr.new(File.expand_path('../webroot', __FILE__))
 run servr
