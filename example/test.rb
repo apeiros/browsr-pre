@@ -4,11 +4,9 @@ $LOAD_PATH.unshift(lib1) unless $LOAD_PATH.include?(lib1)
 $LOAD_PATH.unshift(lib2) unless $LOAD_PATH.include?(lib2)
 
 require 'rack'
-#require 'irb_drop'
 require 'browsr'
 
-app     = Rack::Builder.parse_file('rackup.ru').first
-browser = Browsr.rack(app)
+app = Rack::Builder.parse_file('rackup.ru').first
+B   = Browsr.rack(app)
 
-Browser = browser
-#irb_drop(binding)
+puts "The browser is available via the constant 'B'"

@@ -206,7 +206,7 @@ class Browsr
         end
       end
 
-      def respond_to_missing?(name)
+      def respond_to_missing?(name, include_private)
         @__hash__.has_key?(name) || @__hash__.has_key?(name.to_s.tr('_','-').to_sym)
       end
 

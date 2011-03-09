@@ -92,7 +92,6 @@ class Browsr
     def load_resource(node, url, mime_type)
       if url then
         absolute_url  = absolute_uri_for(url)
-        p :url => url, :absolute_url => absolute_url
         resource      = @browsr.get(absolute_url)
         resource_mime = resource.response.content_mime_type
         if resource_mime != mime_type then
@@ -120,6 +119,7 @@ class Browsr
     end
 
     def eval_js(code)
+      dom # load the dom and all javascript code with it
       javascript_context.eval_js(code, "(eval)")
     end
 

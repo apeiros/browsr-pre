@@ -36,7 +36,6 @@ class Browsr
       # @param line [Integer]
       #   The starting line number (default: 1)
       def initialize(css, data, origin, media, filename, line=1)
-        p :css => css.class, :data => data.class, :origin => origin, :media => media, :filename => filename, :line => line
         @data       = data.encode(Encoding::BINARY)
         @css        = css
         @media      = media

@@ -31,7 +31,6 @@ class Browsr
       def require_js(path)
         full_path = Dir.glob("\{#{$LOAD_PATH.join(',')}\}/#{path}{.js,}").first
         if full_path then
-          puts "Require javascript #{full_path}"
           @interpreter.eval(File.read(full_path), full_path)
         else
           raise "Missing source file, could not find #{path.inspect}"
