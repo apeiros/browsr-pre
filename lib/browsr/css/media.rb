@@ -37,7 +37,6 @@ class Browsr
       AllGroups     = GroupToTypes.keys
       DefaultType   = Set.new([:screen])
       DefaultGroups = Set.new(TypeToGroups[:screen])
-      
 
       # FIXME: not yet implemented
       def self.parse(string)
@@ -84,6 +83,11 @@ class Browsr
       end
       alias === =~
 
+      # returns self, used for duck-typing
+      def media
+        self
+      end
+
       def hash
         [@types, @groups, @queries].hash
       end
@@ -98,6 +102,8 @@ class Browsr
           @types.empty? ? '-' : @types.to_a.sort.join(', '),
           @groups.empty? ? '-' : @groups.to_a.sort.join(', ')
       end
+
+      AllMedia = Media.new([:all],nil,nil)
     end
   end
 end

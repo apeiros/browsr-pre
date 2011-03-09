@@ -4,10 +4,10 @@ require 'browsr/css/rule'
 
 
 
-def parse_css(string, media=Browsr::CSS::Media.new(nil,nil,nil), file="test.css")
-  css = Browsr::CSS.new
-  Browsr::CSS::Parser.new string, css, :author_style_sheet, media, file
-end
+# def parse_css(string, media=Browsr::CSS::Media.new(nil,nil,nil), file="test.css")
+#   css = Browsr::CSS.new
+#   Browsr::CSS::Parser.new css, string, :author_style_sheet, media, file
+# end
 
 
 
@@ -19,8 +19,8 @@ class Browsr
       ValidProperty = Hash.new(true) # FIXME: provide a list with string-keys
 
       # For the arguments, see Parser::new
-      def self.parse(data, styles, origin, filename, line=1)
-        parser = new(data, styles, origin, filename, line)
+      def self.parse(css, data, origin, media, filename, line=1)
+        parser = new(css, data, origin, media, filename, line)
         parser.parse
         parser
       end
@@ -35,7 +35,8 @@ class Browsr
       #   The filename to report in rules and errors
       # @param line [Integer]
       #   The starting line number (default: 1)
-      def initialize(data, css, origin, media, filename, line=1)
+      def initialize(css, data, origin, media, filename, line=1)
+        p :css => css.class, :data => data.class, :origin => origin, :media => media, :filename => filename, :line => line
         @data       = data.encode(Encoding::BINARY)
         @css        = css
         @media      = media

@@ -3,6 +3,7 @@ require 'nokogiri'
 require 'browsr/css'
 require 'browsr/javascript'
 require 'browsr/javascriptengine'
+require 'mime/types'
 
 
 
@@ -11,22 +12,31 @@ class Browsr
   # Window is the equivalent to the state a normal browser has when the user
   # visits a website. It is the context for any javascript, the relative path
   # for assets like images and stylesheets etc.
-  class Window
+  class Window < Resource
+    InlineResource  = Struct.new(:data, :content_mime_type, :loading_file, :loading_line)
+    CSS_MIME_Type   = MIME::Types['text/css'].first
+    JS_MIME_Type    = MIME::Types['application/javascript'].first
+
+    attr_reader :browsr
+    attr_reader :main_resource
     attr_reader :original_source
     attr_reader :javascript
     attr_reader :resources
-    attr_reader :page
+    attr_reader :site
     attr_reader :base
+    attr_reader :log
 
-    def initialize(browser, response)
-      @browser         = browser
-      @page            = response.page
-      @resources       = {}
-      @original_source = source
+    def initialize(browsr, resource)
+      @browsr          = browsr
+      @main_resource   = resource
+      @site            = resource.site
+      @resources       = []
+      @original_source = resource.data
+      @log             = []
     end
 
     def original_dom
-      @original_dom ||= Nokogiri.HTML(source)
+      @original_dom ||= Nokogiri.HTML(@original_source)
     end
 
     def dom
@@ -35,16 +45,14 @@ class Browsr
           case node.name
             when "script"
               # add an if to test whether it's really javascript
-              resource = load_resource(node, node["src"], :javascript)
+              resource = load_resource(node, node["src"], JS_MIME_Type)
               evaluate_javascript_resource(resource)
             when "link"
               if node["rel"].nil? || ['stylesheet', 'alternate stylesheet'].include?(node["rel"].downcase) then
-                resource = load_resource(node, node["href"], :stylesheet)
-                evaluate_stylesheet_resource(resource)
+                load_resource(node, node["href"], CSS_MIME_Type)
               end
             when "style"
-              resource = load_resource(node, nil, :stylesheet)
-              evaluate_stylesheet_resource(resource)
+              load_resource(node, nil, :stylesheet)
           else
             raise "Unknown node.name #{node.name.inspect}"
           end
@@ -54,40 +62,59 @@ class Browsr
     end
 
     def source
-      @dom.to_html
+      dom.to_html
     end
 
     def css
       @css ||= begin
         dom # loads the dom and with it all external stylesheets
-        @css = CSS.new # TODO: add media options
-        @resources.values.select { |resource|
-          #resource.mime_type == :'text/css'
-          resource.type == :stylesheet
-        }.sort_by { |resource|
-          resource.order
+        css = CSS.new do |url|
+          uri      = absolute_uri_for(url)
+          resource = @browsr.get(uri)
+          @resources << resource
+        end # TODO: add media options
+        @resources.select { |resource|
+          resource.response.content_mime_type == CSS_MIME_Type
         }.each do |resource|
-          @css.add_stylesheet(resource.data)
+          css.append_external_stylesheet(
+            resource.data,
+            :author_style_sheet,
+            CSS::Media::AllMedia,
+            resource.loading_file,
+            resource.loading_line
+          )
         end
+
+        css
       end
     end
 
-    def load_resource(node, url, type)
+    def load_resource(node, url, mime_type)
       if url then
-        data        = @browser.get(url, @base)
-        identifier  = url
-        file        = url
-        line        = 1
+        absolute_url  = absolute_uri_for(url)
+        p :url => url, :absolute_url => absolute_url
+        resource      = @browsr.get(absolute_url)
+        resource_mime = resource.response.content_mime_type
+        if resource_mime != mime_type then
+          @log << Log.new(
+            :warning,
+            "Resource delivered as #{resource_mime}, interpreted as #{mime_type}",
+            {:received => resource_mime, :interpreted => mime_type}
+          )
+        end
+        identifier            = url
+        data                  = resource.data
+        resource.loading_file = url
+        resource.loading_line = 1
       else
         data        = node.text
         identifier  = "<#{type}>:#{@resources.size}:line #{node.line}"
-        file        = @page
+        file        = @site
         line        = 1
+        resource    = InlineResource.new(data, mime_type, file, line)
       end
 
-      resource               = Resource.new(@resources.size, type, identifier, file, line, data)
-      raise ArgumentError, "Identifier #{identifier.inspect} already exists"
-      @resources[identifier] = resource
+      @resources << resource
 
       resource
     end
@@ -97,24 +124,25 @@ class Browsr
     end
 
     def evaluate_javascript_resource(resource)
-      javascript_context.eval_js(resource.data, resource.file, resource.line)
+      javascript_context.eval_js(resource.data, resource.loading_file, resource.loading_line)
     rescue
-      puts "Failed to parse #{resource.file}:#{resource.line}", resource.data
+      puts "Failed to parse #{resource.loading_file}:#{resource.loading_line}", resource.data[/\A(?:.*\n){,5}/].gsub(/^/, '>> '), ""
       puts "#{$!.class}:#{$!}", *$!.backtrace.first(5)
-    end
-
-    def evaluate_stylesheet_resource(resource)
-      @styles.parse(resource.data)
     end
 
     def javascript_context
-      @javascript ||= JavascriptEngine.new(@browser, self)
+      @javascript ||= JavascriptEngine.new(self)
     rescue
       puts "#{$!.class}:#{$!}", *$!.backtrace.first(5)
     end
 
+    # generate an absolute uri relative to the window's uri
+    def absolute_uri_for(site)
+      @main_resource.site_uri + site
+    end
+
     def inspect
-      sprintf "#<%s %s>", self.class, @page
+      sprintf "#<%s %s>", self.class, @site
     end
   end
 end

@@ -3,36 +3,49 @@ require 'browsr/resource'
 require 'browsr/window'
 
 class Browsr
+  class NotImplemented < RuntimeError; end
+
   attr_reader :current_window
   attr_reader :medium
 
-  def self.rack(app, options)
+  def self.rack(app, options={})
     require 'browsr/rack'
+    Browsr::Rack.use
     browsr = new
-    browsr.extend Browsr::Rack
+    browsr.extend Browsr::Rack::RackBrowsr
+    browsr.initialize_rack(app, options)
     browsr
   end
 
-  def initialize(app, options={})
-    @app            = app
-    @mock_request   = Rack::MockRequest.new(app)
+  # @param [Hash] options
+  #   An options hash with the following keys:
+  #   * :css_medium_attributes:
+  #     A hash as described for Browsr::CSS::Medium#new's description argument
+  #
+  #   The server_* values are relevant for browsrs decision on how to make what
+  #   requests, and whether they're considered internal or external
+  #   * :server_ip
+  #   * :server_name
+  #   * :server_port
+  def initialize(options={})
+    options         = options.dup
     @current_window = nil
-    @medium         = CSS::Medium.new(options[:medium])
+    @medium         = CSS::Medium.new(options.delete(:css_medium_attributes) || {})
   end
 
+  # @return [Browsr::Window]
   def visit(page)
-    response = @mock_request.get(page)
-    if response.ok? && response.content_type == "text/html" then
-      @current_window = Window.new(self, page, response.body)
-    else
-      nil
-    end
+    resource        = get(page)
+    window          = Window.new(self, resource)
+    @current_window = window
+
+    window
   end
 
-  def get(page, relative_to="/")
-    page = [relative_to, page].join("/") unless page[0] == "/"
-    response = @mock_request.get(page)
-    response.body
+  # Also see Resource#get, as it handles requests relative to the resource
+  # @return [Browsr::Resource]
+  def get(absolute_path, headers=nil)
+    raise NotImplemented
   end
 
   def inspect

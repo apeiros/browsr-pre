@@ -2,24 +2,32 @@ require 'rack'
 
 class Browsr
   module Rack
+    def self.use
+      Browsr::Response.extend RackResponseClass unless Browsr::Response.is_a?(RackResponseClass)
+    end
 
-  def initialize_rack(app, options={})
-    @mock_request   = Rack::MockRequest.new(app)
-  end
+    module RackBrowsr
+      # @param [#call] app
+      #   a Rack app, in other words: anything that responds to #call with a
+      # @param [Hash] response
+      # acceptable by Rack.
+      def initialize_rack(app, options={})
+        @mock_request = ::Rack::MockRequest.new(app)
+      end
 
-  def visit(page)
-    response        = Response.rack_mock_response(@mock_request.get(page))
-    window          = Window.new(self, response)
-    window
-  end
+      # @see Browsr#get
+      def get(page, headers={})
+        request  = Request.new(page, headers)
+        response = Response.rack_mock_response(request, @mock_request.get(page.to_s))
 
-  def get(page, relative_to="/")
-    page = [relative_to, page].join("/") unless page[0] == "/"
-    response = @mock_request.get(page)
-    response.body
-  end
+        Resource.new(request, response)
+      end
+    end
 
-  def inspect
-    sprintf '#<%s>', self.class
+    module RackResponseClass
+      def rack_mock_response(request, mock_response)
+        Response.new(mock_response.status, mock_response.original_headers, mock_response.body)
+      end
+    end
   end
 end

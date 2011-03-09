@@ -6,7 +6,7 @@ class Browsr
       include Enumerable
 
       attr_reader :media
-      attr_reader :rulesets
+      attr_reader :rules
 
       def initialize(media, rules={})
         @media = media

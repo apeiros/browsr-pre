@@ -46,13 +46,22 @@ class Browsr
   #   => [RuleSet(Rule, Rule, ...), RuleSet(Rule, Rule, ...), ...]
   #
   class CSS
+    include Enumerable
+
     attr_accessor :position
     attr_reader   :rulesets, :by_media
 
+    # default_loader:
+    #   gets a string yielded with a relative url and should return the
+    #   corresponding body
     def initialize(&default_loader)
       @rulesets = []
       @by_media = {}
       @position = 0
+    end
+
+    def each(&block)
+      @rulesets.each(&block)
     end
 
     # source is merged before importing, relevant for specificity
@@ -61,11 +70,16 @@ class Browsr
       return if @imported.include?(source)
     end
 
-    def append_external_stylesheet(data, source, line=1, &loader)
-      parser = Parser.new(self, source, line, @options) do |import|
-        append_parsed_stylesheet()
+    # string [String] the stylesheet data as a string
+    # origin [Symbol] the origin of the data, e.g. :author_style_sheet
+    # media  [Browsr::CSS::Media] 
+    # file   [String] the source file, used for error reports
+    # line   [Integer] The starting line number, used for error reports
+    def append_external_stylesheet(string, origin, media, file, line=1, &loader)
+      parser = Parser.new(self, string, origin, media, file, line) do |import|
+        raise "@import not yet implemented"
       end
-      parser.parse(data)
+      parser.parse
     end
 
     def add_rule(media, rule)
@@ -82,26 +96,18 @@ class Browsr
       created
     end
 
-    def append_parsed_stylesheet(stylesheet)
-    end
-
-    def parse_stylesheet(data, source, line)
-    end
-
-    def parse_style_tag(data, source, line)
-    end
-
-    def parse_style_attribute(data, source, line)
-    end
-
-    def computed_style_for_nokogiri(dom, node, medium=Medium.new([:screen],nil,nil))
+    def computed_style_for_nokogiri(dom, node, medium=Medium.new(:type => :screen))
       # get all rules whose media queries are satisfied by the medium
-      rules = @rulesets.grep(medium).map { |ruleset| ruleset.rules }.flatten(1)
+      rules = grep(medium).map { |ruleset| ruleset.rules }
 
       # get all rulesets that match the specified node
-      applying_rules = rules.select { |rule|
-        dom.css(rule.selector).include?(node)
-      }
+      applying_rules = rules.map { |rulehash|
+        rulehash.select { |selector, rule|
+          dom.css(selector).include?(node)
+        }.map { |selector, rule|
+          rule
+        }
+      }.flatten(1)
 
       # merge rulesets in order of specificity
       Properties.merge_rules(applying_rules)

@@ -145,7 +145,7 @@ class Browsr
       # This is the internal hash-table, used for internal purposes. Use with care.
       attr_reader :__hash__
 
-      def initialize(properties_hash)
+      def initialize(properties_hash={})
         @__hash__ = properties_hash
       end
 

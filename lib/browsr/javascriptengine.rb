@@ -7,11 +7,10 @@ class Browsr
       attr_accessor :default_engine
     end
 
-    attr_reader :engine
+    attr_reader :engine, :window
 
-    def initialize(browsr, window, engine=nil)
+    def initialize(window, engine=nil)
       @engine = engine ||= self.class.default_engine
-      @browsr = browsr
       @window = window
 
       case @engine
@@ -42,8 +41,18 @@ class Browsr
       public :require
 
       def initialize_engine
-        @interpreter = V8::Context.new(:with => Javascript::Context.new(@browsr, @window))
-        require_js 'browsr/js/browsr'
+        @interpreter               = V8::Context.new
+        @interpreter["__NATIVE__"] = {
+          "javascript.document.location.href"      => "http://127.0.0.1:80/index.html",
+          "javascript.document.location.protocol"  => "http:",
+          "javascript.document.location.host"      => "127.0.0.1:80",
+          "javascript.document.location.hostname"  => "127.0.0.1",
+          "javascript.document.location.port"      => "80",
+          "javascript.document.location.pathname"  => "/index.html",
+          "javascript.document.location.hash"      => "",
+          "javascript.document.location.search"    => "",
+        }
+        require_js 'browsr/browsers/safari5/javascript/browsr.js'
       end
     end
   end

@@ -60,6 +60,11 @@ class Browsr
       def inspect
         sprintf "\#<%p %s>", self.class, to_hash.map { |key, value| "#{key}: #{value}" }.join(', ')
       end
+
+      def ===(other)
+        other.respond_to?(:media) && other.media === self
+      end
+      alias =~ ===
     private
 
       def to_pixel(value)
