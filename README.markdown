@@ -1,6 +1,7 @@
 GETTING STARTED
 ===============
 
+    gem install mime-types
     gem install nokogiri
     gem install therubyracer
 
