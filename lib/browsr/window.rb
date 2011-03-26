@@ -1,7 +1,6 @@
 require 'v8'
 require 'nokogiri'
 require 'browsr/css'
-require 'browsr/javascript'
 require 'browsr/javascriptengine'
 require 'mime/types'
 
@@ -19,20 +18,33 @@ class Browsr
 
     attr_reader :browsr
     attr_reader :main_resource
+
+    # @return [String]
+    #   The html/xml sourcecode of this window as delivered by the server. @see #source
     attr_reader :original_source
-    attr_reader :javascript
+
+    # @return [Array<Browsr::Resource>]
+    #   A list of post-loaded resource.
+    #   IMPORTANT: resources are lazy loaded. Call load_resources to force
+    #   loading all resources.
     attr_reader :resources
     attr_reader :site
     attr_reader :base
     attr_reader :log
 
     def initialize(browsr, resource)
-      @browsr          = browsr
-      @main_resource   = resource
-      @site            = resource.site
-      @resources       = []
-      @original_source = resource.data
-      @log             = []
+      @browsr             = browsr
+      @main_resource      = resource
+      @site               = resource.site
+      @resources          = []
+      @original_source    = resource.data
+      @javascript_context = nil
+      @dom                = nil
+      @log                = []
+    end
+
+    def load_resources
+      dom # loads the dom and with it all external and internal resources
     end
 
     def original_dom
@@ -67,7 +79,7 @@ class Browsr
 
     def css
       @css ||= begin
-        dom # loads the dom and with it all external stylesheets
+        load_resources # force loading the external stylesheets
         css = CSS.new do |url|
           uri      = absolute_uri_for(url)
           resource = @browsr.get(uri)
@@ -118,8 +130,23 @@ class Browsr
       resource
     end
 
+    def query_selector(selector)
+      return nil unless selector
+      dom.at_css(selector)
+    end
+
+    def query_selector_all(selector)
+      return [] unless selector
+      dom.css(selector)
+    end
+
+    def computed_style(selector, pseudoElt=nil)
+      return nil unless node = query_selector(selector)
+      css.computed_style_for_nokogiri(node, pseudoElt)
+    end
+
     def eval_js(code)
-      dom # load the dom and all javascript code with it
+      load_resources
       javascript_context.eval_js(code, "(eval)")
     end
 
@@ -131,7 +158,7 @@ class Browsr
     end
 
     def javascript_context
-      @javascript ||= JavascriptEngine.new(self)
+      @javascript_context ||= JavascriptEngine.new(self)
     rescue
       puts "#{$!.class}:#{$!}", *$!.backtrace.first(5)
     end
